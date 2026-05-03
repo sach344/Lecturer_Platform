@@ -2,7 +2,7 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const nodemailer = require('nodemailer');
 const User = require('../models/User');
-
+const mongoose = require('mongoose');
 function makeOTP() {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
@@ -38,8 +38,25 @@ exports.register = async (req, res) => {
       return res.status(400).json({ message: 'Name, password, and email or phone are required' });
 
     const exists = await User.findOne({ $or: [email ? { email } : null, phone ? { phone } : null].filter(Boolean) });
-    if (exists) return res.status(409).json({ message: 'User already exists with that email or phone' });
+    if (exists && !exists.isVerified) {
+  const otpCode = makeOTP();
+  exists.otpCode = otpCode;
+  exists.otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+  await exists.save();
 
+  if (exists.email) await sendEmailOTP(exists.email, otpCode);
+
+  return res.status(200).json({
+    message: "User exists, OTP resent",
+    userId: exists._id,
+    otpForDemo: process.env.NODE_ENV !== 'production' ? otpCode : undefined,
+  });
+}
+if (exists && exists.isVerified) {
+  return res.status(409).json({
+    message: "User already registered. Please login."
+  });
+}
     const passwordHash = await bcrypt.hash(password, 12);
     const otpCode = makeOTP();
     const otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
@@ -64,23 +81,45 @@ exports.register = async (req, res) => {
 exports.verifyOTP = async (req, res) => {
   try {
     const { userId, otpCode } = req.body;
+    console.log('VERIFY OTP REQUEST:', { userId, otpCode }); // 🔥 ADD THIS
+
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+      console.log('INVALID USERID:', userId); // 🔥 ADD THIS
+      return res.status(400).json({ message: 'Invalid or missing userId' });
+    }
+
     const user = await User.findById(userId);
+    console.log('USER FOUND:', user ? 'YES' : 'NO', user ? user._id : null); // 🔥 ADD THIS
     if (!user) return res.status(404).json({ message: 'User not found' });
-    if (user.otpCode !== otpCode) return res.status(400).json({ message: 'Invalid OTP' });
-    if (user.otpExpiresAt < new Date()) return res.status(400).json({ message: 'OTP expired. Register again.' });
+
+    console.log('USER OTP CODE:', user.otpCode, 'INPUT OTP:', otpCode); // 🔥 ADD THIS
+    if (user.otpCode !== otpCode)
+      return res.status(400).json({ message: 'Invalid OTP' });
+
+    console.log('OTP EXPIRES AT:', user.otpExpiresAt, 'NOW:', new Date()); // 🔥 ADD THIS
+    if (user.otpExpiresAt < new Date())
+      return res.status(400).json({ message: 'OTP expired. Register again.' });
 
     user.isVerified = true;
     user.otpCode = undefined;
     user.otpExpiresAt = undefined;
+    console.log('SAVING USER...'); // 🔥 ADD THIS
     await user.save();
 
-    const token = jwt.sign({ id: user._id, name: user.name }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign(
+      { id: user._id, name: user.name },
+      process.env.JWT_SECRET,
+      { expiresIn: '7d' }
+    );
+
     res.json({
-      message: 'OTP verified successfully! You are now logged in.',
+      message: 'OTP verified successfully!',
       token,
       user: { id: user._id, name: user.name, email: user.email, phone: user.phone },
     });
+
   } catch (err) {
+    console.error("VERIFY OTP ERROR:", err); // 🔥 ADD THIS
     res.status(500).json({ message: 'Server error', error: err.message });
   }
 };

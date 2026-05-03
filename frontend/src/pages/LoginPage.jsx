@@ -29,33 +29,56 @@ export default function LoginPage() {
       navigate('/');
     } catch (err) {
       const msg = err.response?.data?.message || 'Login failed';
-      if (err.response?.data?.userId) { setUserId(err.response.data.userId); setStep(STEPS.OTP); }
+      if (err.response?.data?.userId) {
+        const uid = err.response.data.userId;
+        setUserId(uid);
+        setStep(STEPS.OTP);
+
+        // 🔥 AUTO RESEND OTP
+        await api.post('/auth/resend-otp', { userId: uid });
+      }
       else setError(msg);
     } finally { setLoading(false); }
   }
 
   async function handleRegister(e) {
-    e.preventDefault();
-    setError(''); setLoading(true);
-    try {
-      const payload = { name: form.name, password: form.password };
-      if (authMethod === 'email') payload.email = form.email;
-      else payload.phone = form.phone;
-      const { data } = await api.post('/auth/register', payload);
-      setUserId(data.userId);
-      if (data.otpForDemo) setSuccess(`Dev OTP: ${data.otpForDemo}`);
-      else setSuccess('OTP sent to your ' + authMethod);
-      setStep(STEPS.OTP);
-    } catch (err) {
-      setError(err.response?.data?.message || 'Registration failed');
-    } finally { setLoading(false); }
+  e.preventDefault();
+  setError('');
+  setLoading(true);
+
+  try {
+    const payload = { name: form.name, password: form.password };
+    if (authMethod === 'email') payload.email = form.email;
+    else payload.phone = form.phone;
+
+    const { data } = await api.post('/auth/register', payload);
+
+    setUserId(data.userId);
+
+    if (data.otpForDemo) setSuccess(`Dev OTP: ${data.otpForDemo}`);
+    else setSuccess('OTP sent to your ' + authMethod);
+
+    setStep(STEPS.OTP);
+
+  } catch (err) {
+    const msg = err.response?.data?.message || 'Registration failed';
+
+    if (msg.includes("already registered")) {
+      setStep(STEPS.LOGIN);
+    }
+
+    setError(msg);
+
+  } finally {
+    setLoading(false);   // 🔥 THIS WAS MISSING
   }
+}
 
   async function handleOTP(e) {
     e.preventDefault();
     setError(''); setLoading(true);
     try {
-      const { data } = await api.post('/auth/verify-otp', { userId, otpCode: otp });
+      const { data } = await api.post('/auth/verify-otp', { userId, otpCode: otp.trim()  });
       if (data.token) { login(data.token, data.user); navigate('/'); }
       else { setSuccess('Verified! Please login.'); setStep(STEPS.LOGIN); }
     } catch (err) {
